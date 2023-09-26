@@ -173,11 +173,11 @@ class CoreMLStableDiffusionPipeline(DiffusionPipeline):
 
         return text_embeddings
 
-    def run_controlnet(self, 
-                       sample, 
-                       timestep, 
-                       encoder_hidden_states, 
-                       controlnet_cond, 
+    def run_controlnet(self,
+                       sample,
+                       timestep,
+                       encoder_hidden_states,
+                       controlnet_cond,
                        output_dtype=np.float16):
         if not self.controlnet:
             raise ValueError(
@@ -185,9 +185,9 @@ class CoreMLStableDiffusionPipeline(DiffusionPipeline):
 
         for i, (module, cond) in enumerate(zip(self.controlnet, controlnet_cond)):
             module_outputs = module(
-                sample=sample.astype(np.float16), 
-                timestep=timestep.astype(np.float16), 
-                encoder_hidden_states=encoder_hidden_states.astype(np.float16), 
+                sample=sample.astype(np.float16),
+                timestep=timestep.astype(np.float16),
+                encoder_hidden_states=encoder_hidden_states.astype(np.float16),
                 controlnet_cond=cond.astype(np.float16),
             )
             if i == 0:
@@ -195,9 +195,9 @@ class CoreMLStableDiffusionPipeline(DiffusionPipeline):
             else:
                 for key in outputs.keys():
                     outputs[key] += module_outputs[key]
-        
+
         outputs = {k: v.astype(output_dtype) for k, v in outputs.items()}
-        
+
         return outputs
 
     def run_safety_checker(self, image):
@@ -254,10 +254,10 @@ class CoreMLStableDiffusionPipeline(DiffusionPipeline):
 
         return latents
 
-    def prepare_control_cond(self, 
-                             controlnet_cond, 
-                             do_classifier_free_guidance, 
-                             batch_size, 
+    def prepare_control_cond(self,
+                             controlnet_cond,
+                             do_classifier_free_guidance,
+                             batch_size,
                              num_images_per_prompt):
         processed_cond_list = []
         for cond in controlnet_cond:
@@ -493,8 +493,8 @@ def get_coreml_pipe(pytorch_pipe,
             compute_unit,
         )
         coreml_pipe_kwargs["controlnet"] = [_load_mlpackage_controlnet(
-            mlpackages_dir, 
-            model_version, 
+            mlpackages_dir,
+            model_version,
             compute_unit,
         ) for model_version in controlnet_models]
     else:
@@ -520,21 +520,48 @@ def get_coreml_pipe(pytorch_pipe,
     return coreml_pipe
 
 
+
 def get_image_path(args, **override_kwargs):
     """ mkdir output folder and encode metadata in the filename
     """
-    out_folder = os.path.join(args.o, "_".join(args.prompt.replace("/", "_").rsplit(" ")))
+    x = datetime.datetime.now()
+
+    out_folder = f"{override_kwargs.get('model_version', None) or args.model_version.replace('/', '__')}"
+    out_folder = x.strftime("%Y") + x.strftime("%m") + x.strftime("%d") + "/" + out_folder
+    out_folder = os.path.join(args.o, out_folder)
     os.makedirs(out_folder, exist_ok=True)
 
-    out_fname = f"randomSeed_{override_kwargs.get('seed', None) or args.seed}"
-    out_fname += f"_computeUnit_{override_kwargs.get('compute_unit', None) or args.compute_unit}"
-    out_fname += f"_modelVersion_{override_kwargs.get('model_version', None) or args.model_version.replace('/', '_')}"
-
+    out_fname = x.strftime("%Y") + x.strftime("%m") + x.strftime("%d") + "_" +  x.strftime("%H") +  x.strftime("%M") +  x.strftime("%S") +"_Seed_"
+    out_fname += f"{override_kwargs.get('seed', None) or args.seed}"
     if args.scheduler is not None:
         out_fname += f"_customScheduler_{override_kwargs.get('scheduler', None) or args.scheduler}"
         out_fname += f"_numInferenceSteps{override_kwargs.get('num_inference_steps', None) or args.num_inference_steps}"
 
-    return os.path.join(out_folder, out_fname + ".png")
+
+    out_path_png = os.path.join(out_folder, out_fname + ".png")
+    out_path_text = os.path.join(out_folder, out_fname + ".txt")
+    logger.info(f"Saving python script to {out_path_text}")
+    py_script = f"python -m python_coreml_stable_diffusion.pipeline \\\n\
+    -i ./ai_model \\\n\
+    -o ./ai_image \\\n\
+    --compute-unit {args.compute_unit} \\\n\
+    --seed {args.seed} \\\n\
+    --prompt \"{args.prompt}\" \\\n\
+    --negative-prompt \"{args.negative_prompt}\" \\\n\
+    --model-version {args.model_version}"
+    file = open(out_path_text, 'w')
+    file.write("python command:\n\n")
+    file.write(py_script)
+    file.write("\n\n")
+    file.write("prompt:\n\n")
+    file.write(args.prompt)
+    file.write("\n\n")
+    file.write("negative-prompt:\n\n")
+    file.write(args.negative_prompt)
+    file.write("\n\n")
+    file.close()
+
+    return out_path_png  
 
 def prepare_controlnet_cond(image_path, height, width):
     image = Image.open(image_path).convert("RGB")
@@ -637,13 +664,13 @@ if __name__ == "__main__":
         help="Controls the influence of the text prompt on sampling process (0=random images)")
     parser.add_argument(
         "--controlnet",
-        nargs="*", 
+        nargs="*",
         type=str,
         help=("Enables ControlNet and use control-unet instead of unet for additional inputs. "
             "For Multi-Controlnet, provide the model names separated by spaces."))
     parser.add_argument(
         "--controlnet-inputs",
-        nargs="*", 
+        nargs="*",
         type=str,
         help=("Image paths for ControlNet inputs. "
             "Please enter images corresponding to each controlnet provided at --controlnet option in same order."))
